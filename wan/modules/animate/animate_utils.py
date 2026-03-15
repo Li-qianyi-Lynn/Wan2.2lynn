@@ -4,6 +4,49 @@ import numbers
 from peft import LoraConfig
 
 
+def extract_personality_and_motion(motion_encoder, face_images, batch_size=8):
+    """
+    从 face 图像中分别提取 personality（身份/风格）和 motion（动作）特征，用于后续 PCA 等统计分析。
+
+    Personality：来自 Encoder 的 enc_app，512 维，同一人不同帧应较稳定。
+    Motion：来自 Encoder 的 enc_motion，20 维原始动作码；可选再通过 direction 得到 512 维 motion 向量。
+
+    Args:
+        motion_encoder: wan.modules.animate.motion_encoder.Generator 实例（即 model.motion_encoder）
+        face_images: torch.Tensor, shape (N, 3, H, W)，已归一化到 [-1, 1]，如 512x512
+        batch_size: 前向时每批帧数，避免 OOM
+
+    Returns:
+        personality: (N, 512) float32，身份/风格特征
+        motion_20: (N, 20) float32，原始动作 latent
+        motion_512: (N, 512) float32，通过 direction 后的 motion 向量（与模型内实际注入的一致）
+    """
+    motion_encoder.eval()
+    N = face_images.shape[0]
+    device = next(motion_encoder.parameters()).device
+    face_images = face_images.to(device=device, dtype=torch.float32)
+
+    personality_list, motion_20_list, motion_512_list = [], [], []
+    with torch.no_grad():
+        for i in range(0, N, batch_size):
+            batch = face_images[i : i + batch_size]
+            # personality: 512-d style/appearance
+            p = motion_encoder.enc.enc_app(batch)
+            personality_list.append(p.cpu().float())
+            # motion: 20-d latent
+            m20 = motion_encoder.enc.enc_motion(batch)
+            motion_20_list.append(m20.cpu().float())
+            # motion 512-d (direction 输出，与 get_motion 一致)
+            with torch.cuda.amp.autocast(dtype=torch.float32):
+                m512 = motion_encoder.dec.direction(m20)
+            motion_512_list.append(m512.cpu().float())
+
+    personality = torch.cat(personality_list, dim=0)
+    motion_20 = torch.cat(motion_20_list, dim=0)
+    motion_512 = torch.cat(motion_512_list, dim=0)
+    return personality, motion_20, motion_512
+
+
 def get_loraconfig(transformer, rank=128, alpha=128, init_lora_weights="gaussian"):
     target_modules = []
     for name, module in transformer.named_modules():
