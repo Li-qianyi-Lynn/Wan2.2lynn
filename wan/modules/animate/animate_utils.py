@@ -30,8 +30,10 @@ def extract_personality_and_motion(motion_encoder, face_images, batch_size=8):
     with torch.no_grad():
         for i in range(0, N, batch_size):
             batch = face_images[i : i + batch_size]
-            # personality: 512-d style/appearance
+            # personality: 512-d style/appearance（enc_app 返回 (vector, list)，取第一项）
             p = motion_encoder.enc.enc_app(batch)
+            if isinstance(p, tuple):
+                p = p[0]
             personality_list.append(p.cpu().float())
             # motion: 20-d latent
             m20 = motion_encoder.enc.enc_motion(batch)
