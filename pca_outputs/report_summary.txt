@@ -1,0 +1,19 @@
+=== Personality 与 Motion PCA 分析 — 汇报要点 ===
+
+1) 数据与预处理
+   样本数 N = 53（每样本一帧 face 图像）。
+   Personality 原始维度 512；Motion 原始维度 20。
+   做 PCA 前对特征做了标准化（零均值、单位方差）。
+
+2) Personality PCA
+   前 2 维累计方差: 0.4544。
+   若同一人不同帧的 personality 点聚在一起，说明身份/风格在表示空间里较稳定、可区分。
+
+3) Motion PCA
+   前 2 维累计方差: 0.6265。
+   若不同动作在 PC1/PC2 上分布不同，说明 20 维 motion 空间能区分不同动作模式。
+
+4) 结论建议（可口头表述）
+   - 模型把 face 解耦成 personality（身份）和 motion（动作）两路特征。
+   - 对两路分别做 PCA 可以看：身份是否聚类、动作是否在低维空间有结构。
+   - 若 personality 前几维方差集中，说明身份信息较紧凑；motion 同理。
