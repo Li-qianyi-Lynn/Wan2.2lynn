@@ -36,20 +36,25 @@ from wan.modules.animate.animate_utils import extract_personality_and_motion
 
 
 def _load_state_dict_from_checkpoint(checkpoint_dir):
-    """从 checkpoint 目录加载完整 state_dict（优先 safetensors）。"""
+    """从 checkpoint 目录加载完整 state_dict；支持多分片 .safetensors 与 pytorch_model.bin。"""
     import glob
-    st_path = os.path.join(checkpoint_dir, "*.safetensors")
-    bin_path = os.path.join(checkpoint_dir, "pytorch_model.bin")
-    for path in glob.glob(st_path):
+    state = {}
+    # 加载所有 .safetensors 分片并合并（Wan2.2-Animate-14B 可能有多片）
+    st_files = sorted(glob.glob(os.path.join(checkpoint_dir, "*.safetensors")))
+    if st_files:
         try:
             from safetensors import safe_open
-            state = {}
-            with safe_open(path, framework="pt", device="cpu") as f:
-                for k in f.keys():
-                    state[k] = f.get_tensor(k)
-            return state
+            for path in st_files:
+                with safe_open(path, framework="pt", device="cpu") as f:
+                    for k in f.keys():
+                        if k in state:
+                            continue
+                        state[k] = f.get_tensor(k)
+            if state:
+                return state
         except Exception as e:
-            print(f"Skip {path}: {e}")
+            print(f"Warning: loading safetensors failed: {e}")
+    bin_path = os.path.join(checkpoint_dir, "pytorch_model.bin")
     if os.path.isfile(bin_path):
         return torch.load(bin_path, map_location="cpu", weights_only=True)
     raise FileNotFoundError(
@@ -58,18 +63,24 @@ def _load_state_dict_from_checkpoint(checkpoint_dir):
 
 
 def load_motion_encoder_only(checkpoint_dir, device="cuda"):
-    """只加载 motion_encoder 权重，不加载完整 14B 模型。"""
+    """只加载 motion_encoder 权重，不加载完整 14B 模型。支持多种 checkpoint 的 key 前缀。"""
     full_state = _load_state_dict_from_checkpoint(checkpoint_dir)
-    prefix = "motion_encoder."
-    subset = {k[len(prefix):]: v for k, v in full_state.items() if k.startswith(prefix)}
-    if not subset:
-        raise KeyError(
-            f"state_dict 中未找到以 '{prefix}' 开头的 key，请确认 checkpoint 为 WanAnimate 模型"
-        )
-    model = Generator(size=512, style_dim=512, motion_dim=20)
-    model.load_state_dict(subset, strict=True)
-    model = model.to(device).eval()
-    return model
+    # 常见前缀：diffusers 直接存为 motion_encoder.；有的仓库存为 model. 或 noise_model.
+    for prefix in ("motion_encoder.", "model.motion_encoder.", "noise_model.motion_encoder."):
+        subset = {k[len(prefix):]: v for k, v in full_state.items() if k.startswith(prefix)}
+        if subset:
+            model = Generator(size=512, style_dim=512, motion_dim=20)
+            model.load_state_dict(subset, strict=True)
+            model = model.to(device).eval()
+            return model
+    # 未找到时打印部分 key 便于排查
+    sample = [k for k in list(full_state.keys())[:30] if "motion" in k.lower() or "enc" in k.lower()]
+    if not sample:
+        sample = list(full_state.keys())[:15]
+    raise KeyError(
+        f"state_dict 中未找到 motion_encoder 相关 key。"
+        f" 示例 key: {sample}"
+    )
 
 
 def load_face_images_from_dir(image_dir, size=512):
