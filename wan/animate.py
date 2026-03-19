@@ -749,9 +749,11 @@ class WanAnimate:
         else:
             seed_g.seed()
 
+        # 扩散空间噪声通道数与 VAE latent 对齐（16 通道），
+        # 额外用于控制的通道通过 y 拼到模型输入里（总计 36 通道）。
         latents = [
             torch.randn(
-                self.noise_model.in_dim,
+                16,
                 target_shape[0],
                 target_shape[1],
                 target_shape[2],
@@ -768,6 +770,18 @@ class WanAnimate:
             raise ValueError(
                 f"max_seq_len {max_seq_len} is not divisible by sp_size {self.sp_size}"
             )
+
+        # 构造占位 y（20 个通道，用于补齐模型 in_dim=36）
+        y = [
+            torch.zeros(
+                20,
+                target_shape[0],
+                target_shape[1],
+                target_shape[2],
+                dtype=torch.bfloat16,
+                device=self.device,
+            )
+        ]
 
         # 调度器
         sample_scheduler = FlowDPMSolverMultistepScheduler(
@@ -787,6 +801,7 @@ class WanAnimate:
             "context": context,
             "seq_len": max_seq_len,
             "clip_fea": clip_context,
+            "y": y,
             "pose_latents": pose_latents,
             "face_pixel_values": face_pixel_values,
         }
@@ -797,6 +812,7 @@ class WanAnimate:
                 "context": context_null,
                 "seq_len": max_seq_len,
                 "clip_fea": clip_context,
+                "y": y,
                 "pose_latents": pose_latents,
                 "face_pixel_values": face_pixel_values_uncond,
             }
