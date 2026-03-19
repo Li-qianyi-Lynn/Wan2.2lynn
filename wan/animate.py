@@ -742,13 +742,6 @@ class WanAnimate:
         lat_t = T // 4 + 1
         target_shape = [lat_t + 1, lat_h, lat_w]
 
-        # 构造 ref 条件 y_ref
-        mask_ref = self.get_i2v_mask(1, lat_h, lat_w, 1, device=self.device)
-        y_ref = torch.concat([mask_ref, ref_latents[0]]).to(
-            dtype=torch.bfloat16, device=self.device
-        )
-        y = [y_ref]
-
         # 采样初始噪声
         seed_g = torch.Generator(device=self.device)
         if seed >= 0:
@@ -794,7 +787,6 @@ class WanAnimate:
             "context": context,
             "seq_len": max_seq_len,
             "clip_fea": clip_context,
-            "y": y,
             "pose_latents": pose_latents,
             "face_pixel_values": face_pixel_values,
         }
@@ -805,7 +797,6 @@ class WanAnimate:
                 "context": context_null,
                 "seq_len": max_seq_len,
                 "clip_fea": clip_context,
-                "y": y,
                 "pose_latents": pose_latents,
                 "face_pixel_values": face_pixel_values_uncond,
             }
