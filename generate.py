@@ -102,7 +102,7 @@ def _validate_args(args):
             task], f"Unsupport size {args.size} for task {args.task}, supported sizes are: {', '.join(SUPPORTED_SIZES[args.task])}"
 
 
-def _parse_args():
+def _parse_args(): # 校验参数
     parser = argparse.ArgumentParser(
         description="Generate a image or video from a text prompt or image using Wan"
     )
@@ -373,7 +373,7 @@ def generate(args):
     logging.info(f"Input prompt: {args.prompt}")
     img = None
     if args.image is not None:
-        img = Image.open(args.image).convert("RGB")
+        img = Image.open(args.image).convert("RGB") # get img from args.image
         logging.info(f"Input image: {args.image}")
 
     # prompt extend

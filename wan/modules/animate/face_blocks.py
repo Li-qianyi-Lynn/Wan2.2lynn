@@ -251,6 +251,7 @@ def get_norm_layer(norm_layer):
     else:
         raise NotImplementedError(f"Norm layer {norm_layer} is not implemented")
 
+'''face adapter'''
 
 class FaceAdapter(nn.Module):
     def __init__(

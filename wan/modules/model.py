@@ -10,7 +10,7 @@ from .attention import flash_attention
 
 __all__ = ['WanModel']
 
-
+#核心Diffusion Transforme 结构实现 （patch_embedding -> time/text embedding -> Transformer blocks -> head -> unpatchify）
 def sinusoidal_embedding_1d(dim, position):
     # preprocess
     assert dim % 2 == 0

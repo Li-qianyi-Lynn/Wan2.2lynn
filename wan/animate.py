@@ -6,6 +6,8 @@ import cv2
 import types
 from copy import deepcopy
 from functools import partial
+from typing import Optional
+
 from einops import rearrange
 import numpy as np
 import torch
@@ -646,3 +648,223 @@ class WanAnimate:
 
         videos = torch.cat(all_out_frames, dim=2)[:, :, :real_frame_len]
         return videos[0] if self.rank == 0 else None
+
+# 使用单张人脸图 + 文本，生成一张同身份但改变肤色 / 表情的图像。
+    def generate_image(
+        self,
+        img_path: str,
+        input_prompt: str = "",
+        n_prompt: str = "",
+        guide_scale: float = 1.0,
+        sampling_steps: int = 20,
+        shift: float = 5.0,
+        seed: int = -1,
+        offload_model: bool = True,
+        save_path: Optional[str] = None,
+    ):
+        r"""
+        使用单张人脸图 + 文本，生成一张同身份但改变肤色 / 表情的图像。
+
+        Args:
+            img_path (`str`): 输入人脸 jpg 路径（RGB 或 BGR 均可，会自动转换）。
+            input_prompt (`str`): 正向文本提示（控制表情 / 肤色等）。
+            n_prompt (`str`): 负向文本提示。
+            guide_scale (`float`): CFG scale，用于加强文本控制（>1 时生效）。
+            sampling_steps (`int`): 采样步数。
+            shift (`float`): 噪声调度 shift 参数，需与训练配置一致。
+            seed (`int`): 随机种子；-1 表示使用随机种子。
+            offload_model (`bool`): 文本编码完成后是否把 T5 挪回 CPU。
+            save_path (`str`, *optional*): 若提供，则把结果保存到该路径。
+
+        Returns:
+            np.ndarray: 输出图像，形状 [H, W, 3]，uint8，RGB。
+        """
+        # 读取并预处理输入图像
+        if not os.path.exists(img_path):
+            raise FileNotFoundError(f"Image not found: {img_path}")
+        img_bgr = cv2.imread(img_path, cv2.IMREAD_COLOR)
+        if img_bgr is None:
+            raise ValueError(f"Failed to read image: {img_path}")
+        img_rgb = img_bgr[..., ::-1]
+
+        # 统一到 512x512，并归一化到 [-1, 1]
+        img_512 = self.padding_resize(img_rgb, height=512, width=512)
+        img_tensor = torch.tensor(img_512 / 127.5 - 1.0)
+
+        # 作为 pose / face / ref 三路输入
+        conditioning_pixel_values = rearrange(
+            img_tensor, "h w c -> 1 c 1 h w"
+        ).to(device=self.device, dtype=torch.bfloat16)
+        face_pixel_values = conditioning_pixel_values.clone()
+        ref_pixel_values = rearrange(
+            img_tensor, "h w c -> 1 c h w"
+        ).to(device=self.device, dtype=torch.bfloat16)
+
+        # 文本编码
+        if n_prompt == "":
+            n_prompt = self.sample_neg_prompt
+        if input_prompt == "":
+            input_prompt = self.sample_prompt
+
+        if not self.t5_cpu:
+            self.text_encoder.model.to(self.device)
+            context = self.text_encoder([input_prompt], self.device)
+            context_null = self.text_encoder([n_prompt], self.device)
+            if offload_model:
+                self.text_encoder.model.cpu()
+        else:
+            context = self.text_encoder([input_prompt], torch.device("cpu"))
+            context_null = self.text_encoder([n_prompt], torch.device("cpu"))
+            context = [t.to(self.device) for t in context]
+            context_null = [t.to(self.device) for t in context_null]
+
+        # CLIP identity 特征
+        img_clip = ref_pixel_values[0]  # [3, H, W]
+        clip_context = self.clip.visual([img_clip[:, None, :, :]]).to(
+            dtype=torch.bfloat16, device=self.device
+        )
+
+        # VAE encode：pose & ref
+        pose_latents_no_ref = self.vae.encode(conditioning_pixel_values)
+        pose_latents_no_ref = torch.stack(pose_latents_no_ref)
+        pose_latents = torch.cat([pose_latents_no_ref], dim=2)
+
+        ref_pixel_values_5d = rearrange(
+            ref_pixel_values, "b c h w -> b c 1 h w"
+        )
+        ref_latents = self.vae.encode(ref_pixel_values_5d)
+        ref_latents = torch.stack(ref_latents)
+
+        B, _, H, W = ref_pixel_values.shape
+        T = 1
+        lat_h = H // 8
+        lat_w = W // 8
+        lat_t = T // 4 + 1
+        target_shape = [lat_t + 1, lat_h, lat_w]
+
+        # 构造 ref 条件 y_ref
+        mask_ref = self.get_i2v_mask(1, lat_h, lat_w, 1, device=self.device)
+        y_ref = torch.concat([mask_ref, ref_latents[0]]).to(
+            dtype=torch.bfloat16, device=self.device
+        )
+        y = [y_ref]
+
+        # 采样初始噪声
+        seed_g = torch.Generator(device=self.device)
+        if seed >= 0:
+            seed_g.manual_seed(seed)
+        else:
+            seed_g.seed()
+
+        latents = [
+            torch.randn(
+                16,
+                target_shape[0],
+                target_shape[1],
+                target_shape[2],
+                dtype=torch.float32,
+                device=self.device,
+                generator=seed_g,
+            )
+        ]
+
+        max_seq_len = int(
+            math.ceil(np.prod(target_shape) // 4 / self.sp_size)
+        ) * self.sp_size
+        if max_seq_len % self.sp_size != 0:
+            raise ValueError(
+                f"max_seq_len {max_seq_len} is not divisible by sp_size {self.sp_size}"
+            )
+
+        # 调度器
+        sample_scheduler = FlowDPMSolverMultistepScheduler(
+            num_train_timesteps=self.num_train_timesteps,
+            shift=1,
+            use_dynamic_shifting=False,
+        )
+        sampling_sigmas = get_sampling_sigmas(sampling_steps, shift)
+        timesteps, _ = retrieve_timesteps(
+            sample_scheduler,
+            device=self.device,
+            sigmas=sampling_sigmas,
+        )
+
+        # 构造条件 / 无条件参数（包含 face_pixel_values，使 FaceEncoder/FaceAdapter 生效）
+        arg_c = {
+            "context": context,
+            "seq_len": max_seq_len,
+            "clip_fea": clip_context,
+            "y": y,
+            "pose_latents": pose_latents,
+            "face_pixel_values": face_pixel_values,
+        }
+
+        if guide_scale > 1:
+            face_pixel_values_uncond = face_pixel_values * 0 - 1
+            arg_null = {
+                "context": context_null,
+                "seq_len": max_seq_len,
+                "clip_fea": clip_context,
+                "y": y,
+                "pose_latents": pose_latents,
+                "face_pixel_values": face_pixel_values_uncond,
+            }
+
+        # 扩散采样
+        with torch.autocast(
+            device_type=str(self.device),
+            dtype=torch.bfloat16,
+            enabled=True,
+        ), torch.no_grad():
+            for t in timesteps:
+                timestep = torch.stack([t])
+
+                noise_pred_cond = TensorList(
+                    self.noise_model(
+                        TensorList(latents),
+                        t=timestep,
+                        **arg_c,
+                    )
+                )
+
+                if guide_scale > 1:
+                    noise_pred_uncond = TensorList(
+                        self.noise_model(
+                            TensorList(latents),
+                            t=timestep,
+                            **arg_null,
+                        )
+                    )
+                    noise_pred = noise_pred_uncond + guide_scale * (
+                        noise_pred_cond - noise_pred_uncond
+                    )
+                else:
+                    noise_pred = noise_pred_cond
+
+                temp_x0 = sample_scheduler.step(
+                    noise_pred[0].unsqueeze(0),
+                    t,
+                    latents[0].unsqueeze(0),
+                    return_dict=False,
+                    generator=seed_g,
+                )[0]
+                latents[0] = temp_x0.squeeze(0)
+
+            x0 = [latents[0].to(dtype=torch.float32)]
+            out_frames = torch.stack(self.vae.decode([x0[0][:, 1:]]))
+
+        # 只取第一帧，反归一化到 [0,255]
+        out_frame = out_frames[0, :, 0]  # [3, H, W]
+        out_frame = (out_frame.clamp(-1, 1) + 1) * 127.5
+        out_img = (
+            out_frame.byte()
+            .cpu()
+            .numpy()
+            .transpose(1, 2, 0)
+        )  # H, W, 3, RGB
+
+        if save_path is not None:
+            # OpenCV 需要 BGR
+            cv2.imwrite(save_path, out_img[..., ::-1])
+
+        return out_img
