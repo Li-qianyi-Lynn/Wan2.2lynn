@@ -771,17 +771,28 @@ class WanAnimate:
                 f"max_seq_len {max_seq_len} is not divisible by sp_size {self.sp_size}"
             )
 
-        # 构造占位 y（20 个通道，用于补齐模型 in_dim=36）
-        y = [
-            torch.zeros(
-                20,
-                target_shape[0],
-                target_shape[1],
-                target_shape[2],
-                dtype=torch.bfloat16,
-                device=self.device,
-            )
-        ]
+        # 像视频生成一样构造 y：包含 ref latent 和一个“空的” reft latent，
+        # 这样与训练时的 36 通道布局完全对齐，而不是简单用全 0 占位。
+        mask_ref = self.get_i2v_mask(1, lat_h, lat_w, 1, device=self.device)
+        y_ref = torch.concat(
+            [mask_ref, ref_latents[0]], dim=0
+        ).to(dtype=torch.bfloat16, device=self.device)
+
+        zeros_video = torch.zeros(
+            3,
+            T,
+            H,
+            W,
+            device=self.device,
+        )
+        y_reft = self.vae.encode([zeros_video])[0]
+        msk_reft = self.get_i2v_mask(
+            lat_t, lat_h, lat_w, 0, device=self.device
+        )
+        y_reft = torch.concat(
+            [msk_reft, y_reft], dim=0
+        ).to(dtype=torch.bfloat16, device=self.device)
+        y = [torch.concat([y_ref, y_reft], dim=1)]
 
         # 调度器
         sample_scheduler = FlowDPMSolverMultistepScheduler(
