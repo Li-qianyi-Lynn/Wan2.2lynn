@@ -751,7 +751,7 @@ class WanAnimate:
 
         latents = [
             torch.randn(
-                16,
+                self.noise_model.in_dim,
                 target_shape[0],
                 target_shape[1],
                 target_shape[2],
