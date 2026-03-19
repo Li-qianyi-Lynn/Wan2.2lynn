@@ -337,13 +337,13 @@ class WanAnimateModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             num_heads=4,
         )
 
-'''
-
-FaceEncoder：把 motion_encoder 产出的 per-frame latent 序列用因果一维卷积做“时间下采样 + 多头重排 + 线性投影”，得到和 DiT 时序长度对齐的 face latents（形状 [batch, time, heads, dim]）。
-FaceAdapter：在指定的若干层（每 5 层一次）用 cross-attention，把这些 face latents 注入到 Transformer block 里，实现论文说的“Face Blocks”特化模块。
 
 
-'''
+# FaceEncoder：把 motion_encoder 产出的 per-frame latent 序列用因果一维卷积做“时间下采样 + 多头重排 + 线性投影”，得到和 DiT 时序长度对齐的 face latents（形状 [batch, time, heads, dim]）。
+# FaceAdapter：在指定的若干层（每 5 层一次）用 cross-attention，把这些 face latents 注入到 Transformer block 里，实现论文说的“Face Blocks”特化模块。
+
+
+
     def after_patch_embedding(self, x: List[torch.Tensor], pose_latents, face_pixel_values):
         pose_latents = [self.pose_patch_embedding(u.unsqueeze(0)) for u in pose_latents]
         for x_, pose_latents_ in zip(x, pose_latents):
