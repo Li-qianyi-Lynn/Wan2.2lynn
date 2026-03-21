@@ -37,7 +37,8 @@ EXAMPLE_PROMPT = {
             "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
     },
     "animate-14B": {
-        "prompt": "视频中的人在做动作",
+        # "prompt": "视频中的人在做动作",
+        "prompt": "视频中的人换了个长相",
         "video": "",
         "pose": "",
         "mask": "",
