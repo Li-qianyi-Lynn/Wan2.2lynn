@@ -363,7 +363,8 @@ class WanAnimate:
 
         src_pose_path = os.path.join(src_root_path, "src_pose.mp4")
         src_face_path = os.path.join(src_root_path, "src_face.mp4")
-        src_ref_path = os.path.join(src_root_path, "src_ref.png")
+        # src_ref_path = os.path.join(src_root_path, "src_ref.png")
+        src_ref_path = os.path.join(src_root_path, "src_ref_fixed.png")
 
         cond_images, face_images, refer_images = self.prepare_source(src_pose_path=src_pose_path, src_face_path=src_face_path, src_ref_path=src_ref_path)
         
