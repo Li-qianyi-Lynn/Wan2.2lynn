@@ -38,4 +38,4 @@ animate_14B.sample_guide_scale = 1.0
 animate_14B.frame_num = 77
 animate_14B.sample_fps = 30
 # animate_14B.prompt = '视频中的人在做动作'
-animate_14B.prompt = '视频中的人换了个长相'
+animate_14B.prompt = '视频中的人变了个肤色和性别'

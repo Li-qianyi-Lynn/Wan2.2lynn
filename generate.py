@@ -38,7 +38,7 @@ EXAMPLE_PROMPT = {
     },
     "animate-14B": {
         # "prompt": "视频中的人在做动作",
-        "prompt": "视频中的人换了个长相",
+        "prompt": "视频中的人变了个肤色和性别",
         "video": "",
         "pose": "",
         "mask": "",
